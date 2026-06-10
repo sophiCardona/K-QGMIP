@@ -5,7 +5,11 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from pyemd import emd
+
+try:
+    from pyemd import emd
+except ImportError:
+    emd = None
 
 from src.models.enums.distance import MetricDistance
 from src.models.enums.notation import Notation
@@ -65,6 +69,10 @@ def emd_causal(u: NDArray[np.float64], v: NDArray[np.float64]) -> float:
     Calculate the Earth Mover's Distance (EMD) between two probability distributions u and v.
     The Hamming distance was used as the ground metric.
     """
+    if emd is None:
+        raise ImportError(
+            "pyemd no esta disponible en este entorno. Instala pyemd o usa la metrica emd-effect."
+        )
     if not all(isinstance(arr, np.ndarray) for arr in [u, v]):
         raise TypeError("u and v must be numpy arrays.")
 

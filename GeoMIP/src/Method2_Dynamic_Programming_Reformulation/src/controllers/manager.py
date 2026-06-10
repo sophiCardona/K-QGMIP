@@ -87,7 +87,7 @@ class Manager:
         Raises:
             ValueError: _description_
 
-        Returns:
+        Returns: 
             str: _description_
         """
         np.random.seed(aplicacion.semilla_numpy)
