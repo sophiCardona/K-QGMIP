@@ -61,8 +61,32 @@ class KGeoMIP(GeometricSIA):
     1. sia_preparar_subsistema()       [heredado de SIA]
     2. Construir tabla_transiciones()  [heredado de GeometricSIA]
     3. _generar_candidatos_k()         [NUEVO — Stirling + filtro geométrico]
-    4. _evaluar_candidatos_exacto()    [NUEVO — producto tensorial + EMD]
+    4. _evaluar_candidatos_exacto()    [NUEVO — concatenate por nodo + EMD]
     5. Retornar Solution con k-MIP     [misma estructura que GeometricSIA]
+
+    ── CORRECCIÓN v2: _distribucion_k_partes() ──────────────────────────────
+    distribucion_marginal() retorna UN ESCALAR POR NODO (prob OFF del nodo),
+    produciendo un vector de shape (n_ncubos,). emd_efecto compara este
+    vector contra sia_dists_marginales que también tiene shape (n_nodos,).
+
+    Por tanto la distribución del sistema partido SP debe construirse
+    con np.concatenate (apilar escalares por nodo) y NO con np.kron
+    (que expande al espacio de 2^n estados y produce shapes incompatibles
+    para particiones desiguales como (1,3) o (1,1,2)).
+
+    Ejemplo concreto para n=4, k=2, partición ({A,B}, {C,D}):
+        dist_parte1 = bipartir({A,B}, presentes).dist_marginal()
+                    = [p_OFF_A, p_OFF_B]          shape (2,)
+        dist_parte2 = bipartir({C,D}, presentes).dist_marginal()
+                    = [p_OFF_C, p_OFF_D]          shape (2,)
+        dist_SP     = concatenate([d1, d2])
+                    = [p_OFF_A, p_OFF_B, p_OFF_C, p_OFF_D]  shape (4,) ✓
+        sia_dists   = [p_OFF_A, p_OFF_B, p_OFF_C, p_OFF_D]  shape (4,) ✓
+        emd_efecto  = sum|dist_SP - sia_dists|  ← compatible
+
+    Con np.kron(d1, d2) = shape (4,) para (2,2) PERO shape (3,) para (1,3)
+    → crash para cualquier partición desigual.
+    ─────────────────────────────────────────────────────────────────────────
 
     Args:
     ----
@@ -70,20 +94,7 @@ class KGeoMIP(GeometricSIA):
         k (int): Número de partes. k=2 reproduce GeometricSIA original.
         top_n (int): Cuántos candidatos geométricos pasan a evaluación
                      exacta con EMD. Trade-off precisión/velocidad.
-                     Por defecto 10. Para garantía de óptimo usar None
-                     (evalúa todos, equivalente a KBruteForce pero con
-                     filtro geométrico previo).
-
-    Complejidad:
-    -----------
-        Construcción tabla: igual que GeometricSIA — O(n² × 2ⁿ)
-        Generación candidatos: O(S(n,k)) números de Stirling
-        Filtro geométrico: O(S(n,k) × 2ⁿ)
-        Evaluación exacta: O(top_n × n)
-        Total dominante: O(S(n,k) × 2ⁿ)
-
-        Para n=10, k=3: S(10,3)=9330 → viable.
-        Para n=15, k=3: S(15,3)≈2.3M → requiere top_n pequeño.
+                     Por defecto 10. Para garantía de óptimo usar None.
     """
 
     def __init__(
@@ -97,7 +108,7 @@ class KGeoMIP(GeometricSIA):
         if top_n is not None and top_n < 1:
             raise ValueError(f"top_n debe ser >= 1 o None, recibido: {top_n}")
 
-        super().__init__(gestor)   # inicializa GeometricSIA completo
+        super().__init__(gestor)
         self.k = k
         self.top_n = top_n
         self.logger = SafeLogger(KGEOMIP_TAG)
@@ -113,26 +124,13 @@ class KGeoMIP(GeometricSIA):
         """
         Encuentra la k-MIP usando el enfoque geométrico extendido.
 
-        Para k=2 el resultado es idéntico a GeometricSIA. Para k>2
+        Para k=2 el resultado es comparable a GeometricSIA. Para k>2
         amplía el espacio de búsqueda usando la tabla de costos como
         heurística de filtrado antes de la evaluación exacta con EMD.
-
-        Args:
-        ----
-            condicion (str): Cadena de bits para condicionamiento de fondo.
-            alcance (str): Bits en 0 indican futuros a substraer.
-            mecanismo (str): Bits en 0 indican presentes a substraer.
-            tpm (np.ndarray): Matriz de probabilidad de transición.
-
-        Returns:
-        -------
-            Solution: k-MIP encontrada con pérdida φ mínima.
         """
         # ── 1. Preparar subsistema + construir tabla_transiciones ──────────
-        # sia_preparar_subsistema viene de SIA (vía GeometricSIA)
         self.sia_preparar_subsistema(condicion, alcance, mecanismo, tpm)
 
-        # Preparar _flat_data (igual que GeometricSIA.aplicar_estrategia)
         self._flat_data = [
             ncubo.data.ravel()
             for ncubo in self.sia_subsistema.ncubos
@@ -140,9 +138,8 @@ class KGeoMIP(GeometricSIA):
 
         dims = self.sia_subsistema.dims_ncubos
         self.estado_inicial = self.sia_subsistema.estado_inicial[dims]
-        self.estado_final = 1 - self.estado_inicial
+        self.estado_final   = 1 - self.estado_inicial
 
-        # Construir tabla_transiciones con el BFS heredado de GeometricSIA
         self.idx_ncubos = list(range(len(self.sia_subsistema.indices_ncubos)))
         self.caminos = {0: [self.estado_inicial.tolist()]}
         self.tabla_transiciones[
@@ -154,7 +151,7 @@ class KGeoMIP(GeometricSIA):
 
         self.logger.critic("Tabla de transiciones construida.")
 
-        # ── 2. Validación de k contra tamaño del subsistema ───────────────
+        # ── 2. Validar k ──────────────────────────────────────────────────
         n_futuros = self.sia_subsistema.indices_ncubos.size
         if n_futuros < self.k:
             self.logger.error(
@@ -202,29 +199,14 @@ class KGeoMIP(GeometricSIA):
         indices_futuros: list[int],
     ) -> list[tuple[tuple[int, ...], ...]]:
         """
-        Genera todas las k-particiones y las ordena por costo geométrico.
-        Retorna las top_n con menor costo (o todas si top_n es None).
-
-        El costo geométrico de una k-partición es la suma de costos
-        tx(estado_inicial, estado_final) para las variables cuyos
-        índices pertenecen a partes distintas. Es una heurística rápida
-        que aproxima qué particiones "rompen menos" el hipercubo.
-
-        Args:
-        ----
-            indices_futuros: índices locales de variables futuras.
-
-        Returns:
-        -------
-            Lista de k-particiones ordenadas por costo geométrico ascendente.
+        Genera todas las k-particiones, las ordena por costo geométrico
+        y retorna las top_n mejores (o todas si top_n es None).
         """
         puntuaciones = []
-
         for particion in self._generar_k_particiones(indices_futuros, self.k):
             costo = self._costo_geometrico(particion)
             puntuaciones.append((costo, particion))
 
-        # Ordenar por menor costo geométrico
         puntuaciones.sort(key=lambda x: x[0])
 
         if self.top_n is None:
@@ -238,35 +220,19 @@ class KGeoMIP(GeometricSIA):
         """
         Costo geométrico de una k-partición usando tabla_transiciones.
 
-        Para cada variable futura, consulta el costo tx en la entrada
-        (estado_inicial, estado_final) de tabla_transiciones. Variables
-        en grupos distintos que "comparten" transiciones costosas indican
-        una partición que "corta" el hipercubo en zonas de alta inercia.
-
-        La suma de costos de las variables en el grupo más costoso
-        aproxima el EMD que tendrá esa partición.
-
-        Args:
-        ----
-            grupos_futuros: k-partición como tupla de k tuplas de índices.
-
-        Returns:
-        -------
-            float: costo geométrico escalar de la partición.
+        Consulta la entrada (estado_inicial → estado_final) de la tabla
+        y suma los costos tx de las variables de cada grupo.
         """
         key = tuple(self.caminos[0][0]), tuple(self.estado_final)
         costos_por_variable: list[float] = self.tabla_transiciones[key]
 
         costo_total = 0.0
         for grupo in grupos_futuros:
-            # Suma de costos de las variables de este grupo
-            costo_grupo = sum(
+            costo_total += sum(
                 costos_por_variable[idx]
                 for idx in grupo
                 if costos_por_variable[idx] is not None
             )
-            costo_total += costo_grupo
-
         return costo_total
 
     # ── Fase 4: Evaluación exacta ───────────────────────────────────────────
@@ -276,90 +242,95 @@ class KGeoMIP(GeometricSIA):
         candidatos: list[tuple[tuple[int, ...], ...]],
     ) -> tuple[float, np.ndarray, str]:
         """
-        Evalúa cada candidato con el EMD exacto y retorna el mejor.
-
-        Para cada k-partición:
-          a. Calcula distribución de cada parte vía System.bipartir()
-          b. Producto tensorial np.kron iterativo para obtener dist_sp
-          c. EMD(dist_sp, sia_dists_marginales) = φ exacto
-
-        Args:
-        ----
-            candidatos: lista de k-particiones pre-filtradas.
-
-        Returns:
-        -------
-            Tupla (mejor_perdida, mejor_dist_particion, mejor_fmt_str).
+        Evalúa cada candidato con EMD exacto y retorna el mejor.
         """
         indices_presentes = list(range(self.sia_subsistema.dims_ncubos.size))
 
         mejor_perdida = INFTY_POS
-        mejor_dist = np.array(DUMMY_ARR, dtype=np.float32)
-        mejor_fmt = ERROR_PARTITION
+        mejor_dist    = np.array(DUMMY_ARR, dtype=np.float32)
+        mejor_fmt     = ERROR_PARTITION
 
         for grupos_futuros in candidatos:
-            dist_sp = self._producto_tensorial_k_partes(
-                grupos_futuros, indices_presentes
-            )
+            dist_sp = self._distribucion_k_partes(grupos_futuros, indices_presentes)
             perdida = emd_efecto(dist_sp, self.sia_dists_marginales)
 
             if perdida < mejor_perdida:
                 mejor_perdida = perdida
-                mejor_dist = dist_sp
-                mejor_fmt = self._formatear_k_particion(
+                mejor_dist    = dist_sp
+                mejor_fmt     = self._formatear_k_particion(
                     grupos_futuros, indices_presentes
                 )
 
         return mejor_perdida, mejor_dist, mejor_fmt
 
-    def _producto_tensorial_k_partes(
+    def _distribucion_k_partes(
         self,
         grupos_futuros: tuple[tuple[int, ...], ...],
         indices_presentes: list[int],
     ) -> np.ndarray:
         """
-        Calcula p(S₁) ⊗ p(S₂) ⊗ ... ⊗ p(Sₖ).
+        Construye la distribución del sistema partido SP para una k-partición.
 
-        Cada parte Sᵢ se evalúa con System.bipartir():
-          - alcance   = futuros de la parte i  (indices reales del subsistema)
-          - mecanismo = todos los presentes     (igual para todas las partes)
+        ── Por qué concatenate y no kron ────────────────────────────────────
+        distribucion_marginal() retorna UN ESCALAR POR NODO (prob de OFF),
+        produciendo shape (n_ncubos_en_la_parte,).
 
-        Esta asimetría (futuros particionados, presentes completos) es
-        consistente con el comportamiento de BruteForce y GeometricSIA
-        para bi-particiones.
+        emd_efecto(u, v) = sum|u_i - v_i| donde u_i y v_i son la prob OFF
+        del nodo i. Ambos vectores deben tener shape (n_nodos_total,).
+
+        La distribución SP se construye apilando los escalares de cada parte
+        EN EL ORDEN CORRECTO DE LOS ÍNDICES REALES de los nodos futuros.
+        np.concatenate hace exactamente eso.
+
+        np.kron produciría el espacio de 2^n estados (correcto para emd_causal
+        con distancia Hamming), pero emd_efecto opera sobre n escalares, no
+        sobre 2^n estados. Usar kron aquí es matemáticamente incorrecto y
+        además produce shapes variables que crashean para particiones desiguales.
+
+        Ejemplo n=4, k=2, grupos=((0,1),(2,3)):
+            bipartir([A,B], presentes).dist_marginal() → [p_A, p_B]  shape (2,)
+            bipartir([C,D], presentes).dist_marginal() → [p_C, p_D]  shape (2,)
+            concatenate → [p_A, p_B, p_C, p_D]  shape (4,)  ← coincide con sia
 
         Args:
         ----
             grupos_futuros: k-partición de índices locales de futuros.
+                            Cada tupla contiene índices locales (0-based).
             indices_presentes: índices locales de presentes (siempre todos).
 
         Returns:
         -------
-            np.ndarray: distribución del sistema partido (SP).
+            np.ndarray shape (n_futuros_total,): distribución SP ordenada
+            por índice real de nodo futuro, lista para emd_efecto.
         """
         arr_presentes = self.sia_subsistema.dims_ncubos[indices_presentes]
 
-        # Primera parte — inicializa el resultado
-        futuros_reales_0 = self.sia_subsistema.indices_ncubos[
-            list(grupos_futuros[0])
-        ]
-        resultado = (
-            self.sia_subsistema
-            .bipartir(futuros_reales_0, arr_presentes)
-            .distribucion_marginal()
-        )
+        # Acumular (indice_real, valor_escalar) para ordenar correctamente
+        # antes de concatenar, garantizando que el orden coincide con
+        # sia_dists_marginales (que sigue el orden de indices_ncubos)
+        nodo_a_prob: dict[int, float] = {}
 
-        # Partes 1..k-1 — producto tensorial iterativo
-        for grupo in grupos_futuros[1:]:
-            futuros_reales_i = self.sia_subsistema.indices_ncubos[list(grupo)]
-            dist_i = (
+        for grupo in grupos_futuros:
+            # Convertir índices locales a índices reales del subsistema
+            futuros_reales = self.sia_subsistema.indices_ncubos[list(grupo)]
+            arr_futuros    = np.array(futuros_reales, dtype=np.int8)
+
+            dist_parte = (
                 self.sia_subsistema
-                .bipartir(futuros_reales_i, arr_presentes)
+                .bipartir(arr_futuros, arr_presentes)
                 .distribucion_marginal()
             )
-            resultado = np.kron(resultado, dist_i)
+            # dist_parte[i] corresponde al nodo futuros_reales[i]
+            for i, nodo_real in enumerate(futuros_reales):
+                nodo_a_prob[int(nodo_real)] = float(dist_parte[i])
 
-        return resultado
+        # Reconstruir en el orden canónico de indices_ncubos del subsistema
+        # para que coincida con sia_dists_marginales
+        dist_sp = np.array(
+            [nodo_a_prob[int(n)] for n in self.sia_subsistema.indices_ncubos],
+            dtype=np.float32,
+        )
+        return dist_sp
 
     # ── Generador de k-particiones (Stirling) ──────────────────────────────
 
@@ -371,21 +342,11 @@ class KGeoMIP(GeometricSIA):
         """
         Genera todas las k-particiones del conjunto `elementos`.
 
-        Basado en la recurrencia de Stirling S(n,k) = k·S(n-1,k) + S(n-1,k-1).
-        El primer elemento siempre va al primer grupo para evitar duplicados.
+        Implementación recursiva: S(n,k) = k·S(n-1,k) + S(n-1,k-1).
+        Fija el primer elemento en el primer grupo para evitar duplicados.
 
-        Args:
-        ----
-            elementos: lista de enteros a particionar.
-            k: número de grupos deseados.
-
-        Yields:
-        ------
-            Tupla de k tuplas ordenadas, cada una con los índices de un grupo.
-
-        Conteos de referencia:
-            S(4,2)=7,  S(4,3)=6,  S(4,4)=1
-            S(6,2)=31, S(6,3)=90, S(6,4)=65
+        Conteos verificados:
+            S(3,2)=3,  S(4,2)=7,  S(4,3)=6,  S(6,3)=90,  S(10,3)=9330
         """
         n = len(elementos)
 
@@ -399,16 +360,14 @@ class KGeoMIP(GeometricSIA):
             return
 
         primero = elementos[0]
-        resto = elementos[1:]
+        resto   = elementos[1:]
 
-        # Caso A: primero forma su propio grupo (nuevo grupo al frente)
         for sub in self._generar_k_particiones(resto, k - 1):
             yield ((primero,),) + sub
 
-        # Caso B: primero se agrega a cada uno de los k grupos existentes
         for sub in self._generar_k_particiones(resto, k):
             for i in range(k):
-                grupos = list(sub)
+                grupos    = list(sub)
                 grupos[i] = tuple(sorted(grupos[i] + (primero,)))
                 yield tuple(grupos)
 
@@ -420,22 +379,10 @@ class KGeoMIP(GeometricSIA):
         indices_presentes: list[int],
     ) -> str:
         """
-        Representación legible de la k-MIP encontrada.
-
-        Usa ABECEDARY y LOWER_ABECEDARY del proyecto base, igual que
-        fmt_biparte_q() de format.py. Una columna por parte:
+        Representación legible de la k-MIP:
 
             |Futuros_1||Futuros_2||...||Futuros_k|
             |Presentes||Presentes||...||Presentes |
-
-        Args:
-        ----
-            grupos_futuros: grupos de índices locales de futuros.
-            indices_presentes: índices locales de presentes.
-
-        Returns:
-        -------
-            str: representación formateada multi-parte.
         """
         from src.funcs.base import ABECEDARY, LOWER_ABECEDARY
         from src.constants.base import VOID_STR
@@ -455,7 +402,7 @@ class KGeoMIP(GeometricSIA):
                 ",".join(ABECEDARY[f] for f in futuros_reales)
                 if futuros_reales.size else VOID_STR
             )
-            ancho = max(len(str_fut), len(str_pre)) + 2
+            ancho      = max(len(str_fut), len(str_pre)) + 2
             linea_top += f"|{str_fut:^{ancho}}|"
             linea_bot += f"|{str_pre:^{ancho}}|"
 

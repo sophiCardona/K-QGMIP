@@ -1,0 +1,3 @@
+2026-06-14 11:02:10 [KGeoMIP_strategy] CRITICAL Process-15: Tabla de transiciones construida.
+2026-06-14 11:02:15 [KGeoMIP_strategy] CRITICAL Process-15: Candidatos tras filtro geométrico: 10
+2026-06-14 11:02:15 [KGeoMIP_strategy] CRITICAL Process-15: k-MIP encontrada: φ=4.999278
