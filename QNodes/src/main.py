@@ -63,6 +63,7 @@ def ejecutar_con_tiempo(
 def ejecutar_desde_excel(
     ruta_excel: Path,
     ruta_salida: Path,
+    sheet_name: str = "10A-Elementos",
     inicio: int = 0,
     cantidad: int = 10,
     estado_inicio: str | None = None,
@@ -71,31 +72,38 @@ def ejecutar_desde_excel(
     timeout_seg: int = 3600,
     estrategia: str = "kqnodes",
 ):
-    df = pd.read_excel(
-        ruta_excel,
-        sheet_name=0,
-        usecols="B",
-        skiprows=3,
-        names=["Subsistema"],
-    )
-    filas = df["Subsistema"].dropna().tolist()
-    filas = filas[inicio: inicio + cantidad]
+    """
+    Lee la hoja `sheet_name` del Excel de pruebas.
 
-    # Inferir estado inicial y cargar TPM
+    Estructura de la hoja:
+      Fila 0: "Estado inicial" | "<bits estado>" | ...
+      Fila 3: "#Prueba" | "Alcance o Purview (t+1)" | "Mecanismo(t)" | ...
+      Fila 4+: numero | letras alcance (ej. ABCDEFGHIJ) | letras mecanismo | ...
+    """
+    # Leer estado inicial desde la celda B0 de la hoja
+    hdr = pd.read_excel(ruta_excel, sheet_name=sheet_name, nrows=1, header=None)
+    estado_bits = str(hdr.iloc[0, 1]).strip()   # "1000000000" para N=10
+    n_bits = len(estado_bits)
+
     if estado_inicio is None:
-        # Detectar N a partir de la primera fila con formato "XYZ|abc"
-        primera = str(filas[0])
-        partes_primera = primera.split("|")
-        n_bits = max(
-            len(re.sub(r"[^A-Z]", "", partes_primera[0])),
-            len(re.sub(r"[^A-Z]", "", partes_primera[1] if len(partes_primera) > 1 else "")),
-        ) if len(partes_primera) >= 2 else 10
-        # Usar el N del Manager para buscar el CSV
-        estado_inicio = "1" * n_bits
+        estado_inicio = estado_bits
     else:
         n_bits = len(estado_inicio)
 
     condiciones = condiciones or ("1" * n_bits)
+
+    # Leer filas de datos (skiprows=4 salta las 4 filas de cabecera)
+    df = pd.read_excel(
+        ruta_excel,
+        sheet_name=sheet_name,
+        skiprows=4,
+        header=None,
+        usecols=[0, 1, 2],
+        names=["Prueba", "Alcance", "Mecanismo"],
+    )
+    df = df.dropna(subset=["Alcance", "Mecanismo"])
+    filas = df[["Alcance", "Mecanismo"]].values.tolist()
+    filas = filas[inicio: inicio + cantidad]
 
     gestor = Manager(estado_inicio)
     print(f"Cargando TPM desde: {gestor.tpm_filename}")
@@ -105,16 +113,12 @@ def ejecutar_desde_excel(
 
     resultados = []
 
-    for i, fila in enumerate(filas, start=inicio + 1):
-        partes = str(fila).split("|")
-        if len(partes) != 2:
-            continue
-
+    for i, (alc_raw, mec_raw) in enumerate(filas, start=inicio + 1):
         alcance = convertir_a_binario(
-            re.sub(r"[^A-Z]", "", partes[0]), n_bits=n_bits
+            re.sub(r"[^A-Z]", "", str(alc_raw).upper()), n_bits=n_bits
         )
         mecanismo = convertir_a_binario(
-            re.sub(r"[^A-Z]", "", partes[1]), n_bits=n_bits
+            re.sub(r"[^A-Z]", "", str(mec_raw).upper()), n_bits=n_bits
         )
         print(f"Iteracion {i} -- Alcance: {alcance}  Mecanismo: {mecanismo}")
 
@@ -190,10 +194,12 @@ def iniciar():
     k = int(os.getenv("KQNODES_K", "2"))
     cantidad = int(os.getenv("KQNODES_CANTIDAD", "10"))
     estrategia = str(os.getenv("KQNODES_ESTRATEGIA", "kqnodes")).lower()
+    sheet = str(os.getenv("KQNODES_SHEET", "10A-Elementos"))
 
     ejecutar_desde_excel(
         ruta_entrada,
         ruta_salida,
+        sheet_name=sheet,
         cantidad=cantidad,
         k=k,
         estrategia=estrategia,
