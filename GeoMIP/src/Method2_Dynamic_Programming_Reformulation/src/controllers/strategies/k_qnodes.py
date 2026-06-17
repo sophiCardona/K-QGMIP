@@ -81,32 +81,34 @@ class KQNodes(QNodes):
         self.k = k
         # Caché inter-iteraciones: persiste entre las k-1 pasadas de Queyranne.
         # Clave: (tuple(dims_ACTUAL), tuple(idxs_EFECTO))
-        # Valor: (φ_δ: float, dist_δ: np.ndarray)
+        # Valor: (phi_δ: float, dist_δ: np.ndarray)
         self.memoria_delta: dict = {}
         self.logger = SafeLogger(KQNODES_TAG)
 
     @profile(context={TYPE_TAG: KQNODES_ANALYSIS_TAG})
     def aplicar_estrategia(
         self,
-        estado_inicial: str,
         condicion: str,
         alcance: str,
         mecanismo: str,
+        tpm: np.ndarray,
     ) -> Solution:
         """
         Encuentra la k-MIP usando el enfoque submodular greedy.
 
+        Firma consistente con KGeoMIP y KBruteForce.
+
         Args:
-            estado_inicial: cadena de bits de longitud N.
             condicion:  bits en '0' condicionan la variable.
             alcance:    bits en '0' sustraen la variable del futuro.
             mecanismo:  bits en '0' sustraen la variable del presente.
+            tpm:        Matriz de probabilidad de transición shape (2^N, N).
 
         Returns:
-            Solution con la k-MIP encontrada (φ, partición, distribuciones, tiempo).
+            Solution con la k-MIP encontrada (phi, partición, distribuciones, tiempo).
         """
         # ── PASO 1: Preparar subsistema ────────────────────────────────────
-        self.sia_preparar_subsistema(condicion, alcance, mecanismo)
+        self.sia_preparar_subsistema(condicion, alcance, mecanismo, tpm)
 
         # ── PASO 2: Construir vértices ─────────────────────────────────────
         F = [(EFECTO, int(i)) for i in self.sia_subsistema.indices_ncubos]
@@ -118,10 +120,9 @@ class KQNodes(QNodes):
         self.indices_alcance   = self.sia_subsistema.indices_ncubos
         self.indices_mecanismo = self.sia_subsistema.dims_ncubos
 
-        import numpy as _np
         self.tiempos = (
-            _np.zeros(self.n, dtype=_np.int8),
-            _np.zeros(self.m, dtype=_np.int8),
+            np.zeros(self.n, dtype=np.int8),
+            np.zeros(self.m, dtype=np.int8),
         )
 
         # ── PASO 3: Validar k ──────────────────────────────────────────────
@@ -173,12 +174,12 @@ class KQNodes(QNodes):
 
         self.logger.critic(f"KQNodes: {len(partes)} partes encontradas.")
 
-        # ── PASO 5: Evaluar φ ──────────────────────────────────────────────
+        # ── PASO 5: Evaluar phi ──────────────────────────────────────────────
         D_SP   = self._producto_tensorial_k_partes(partes)
         perdida = emd_efecto(D_SP, self.sia_dists_marginales)
         fmt     = self._formatear_k_particion(partes)
 
-        self.logger.critic(f"k-MIP encontrada: φ={perdida:.6f}")
+        self.logger.critic(f"k-MIP encontrada: phi={perdida:.6f}")
 
         # ── PASO 6: Retornar solución ──────────────────────────────────────
         return Solution(
@@ -207,7 +208,7 @@ class KQNodes(QNodes):
         para deltas que reaparecen en iteraciones posteriores.
 
         Returns:
-            (φ_unión, φ_delta, dist_delta)
+            (phi_unión, phi_delta, dist_delta)
         """
         # ── Extraer índices de δ ───────────────────────────────────────────
         planos_delta = self._aplanar_vertices(deltas)

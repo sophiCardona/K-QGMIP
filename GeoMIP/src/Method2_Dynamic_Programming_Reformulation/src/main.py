@@ -109,11 +109,8 @@ def ejecutar_con_tiempo(
     try:
         if estrategia == "kqnodes":
             analizador = KQNodes(config_sistema, k=k)
-            # KQNodes recibe estado_inicial implícito desde Manager,
-            # pero necesita la cadena de estado para sia_preparar_subsistema.
-            estado_inicial = config_sistema.estado_inicial
             resultado = analizador.aplicar_estrategia(
-                estado_inicial, condiciones, alcance, mecanismo
+                condiciones, alcance, mecanismo, tpm
             )
         else:
             analizador = KGeoMIP(config_sistema, k=k, top_n=top_n)
