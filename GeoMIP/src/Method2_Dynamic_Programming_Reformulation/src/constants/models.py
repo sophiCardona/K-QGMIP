@@ -29,3 +29,8 @@ QNODES_ANALYSIS_TAG: str = f"{QNODES_LABEL}_analysis"
 GEOMETRIC_LABEL: str = "Geometric"
 GEOMETRIC_STRAREGY_TAG: str = f"{GEOMETRIC_LABEL}_strategy"
 GEOMETRIC_ANALYSIS_TAG: str = f"{GEOMETRIC_LABEL}_analysis"
+
+# KQNodes
+KQNODES_LABEL: str = "KQNodes"
+KQNODES_TAG: str = f"{KQNODES_LABEL}_strategy"
+KQNODES_ANALYSIS_TAG: str = f"{KQNODES_LABEL}_analysis"
