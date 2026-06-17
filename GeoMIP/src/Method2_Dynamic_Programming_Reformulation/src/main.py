@@ -12,6 +12,7 @@ CORRECCIONES respecto a la versión modificada:
 from src.controllers.manager import Manager
 from src.controllers.strategies.geometric import GeometricSIA
 from src.controllers.strategies.k_geomip import KGeoMIP
+from src.controllers.strategies.k_qnodes import KQNodes
 from src.controllers.strategies.q_nodes import QNodes
 
 try:
@@ -96,25 +97,41 @@ def ejecutar_con_tiempo(
     tpm: np.ndarray,
     k: int = 2,
     top_n: int | None = 20,
+    estrategia: str = "kgeomip",
 ):
     """
-    Ejecuta KGeoMIP en un proceso hijo aislado.
+    Ejecuta KGeoMIP o KQNodes en un proceso hijo aislado.
     El proceso padre puede matarlo con timeout si tarda demasiado.
+
+    Args:
+        estrategia: "kgeomip" (default) o "kqnodes".
     """
     try:
-        analizador = KGeoMIP(config_sistema, k=k, top_n=top_n)
-        resultado  = analizador.aplicar_estrategia(condiciones, alcance, mecanismo, tpm)
+        if estrategia == "kqnodes":
+            analizador = KQNodes(config_sistema, k=k)
+            # KQNodes recibe estado_inicial implícito desde Manager,
+            # pero necesita la cadena de estado para sia_preparar_subsistema.
+            estado_inicial = config_sistema.estado_inicial
+            resultado = analizador.aplicar_estrategia(
+                estado_inicial, condiciones, alcance, mecanismo
+            )
+        else:
+            analizador = KGeoMIP(config_sistema, k=k, top_n=top_n)
+            resultado  = analizador.aplicar_estrategia(condiciones, alcance, mecanismo, tpm)
+
         resultado_queue.put({
-            "particion": resultado.particion,
-            "perdida":   str(resultado.perdida).replace('.', ','),
-            "tiempo":    str(resultado.tiempo_ejecucion).replace('.', ','),
+            "particion":  resultado.particion,
+            "perdida":    str(resultado.perdida).replace('.', ','),
+            "tiempo":     str(resultado.tiempo_ejecucion).replace('.', ','),
+            "estrategia": estrategia,
         })
     except Exception as e:
         print(f"  [proceso hijo] Error: {e}")
         resultado_queue.put({
-            "particion": None,
-            "perdida":   None,
-            "tiempo":    None,
+            "particion":  None,
+            "perdida":    None,
+            "tiempo":     None,
+            "estrategia": estrategia,
         })
 
 
@@ -181,6 +198,7 @@ def ejecutar_desde_excel(
     k: int = 2,
     timeout_seg: int = 3600,
     max_n: int = 15,          # limita qué N se selecciona automáticamente
+    estrategia: str = "kgeomip",
 ):
     df = pd.read_excel(
         ruta_excel,
@@ -229,6 +247,7 @@ def ejecutar_desde_excel(
                 tpm,
                 k,
                 top_n,
+                estrategia,
             ),
         )
         proceso.start()
@@ -277,15 +296,19 @@ def iniciar():
         )
     )
 
-    # ── Controlar N y k desde variables de entorno ────────────────────────
-    # En Windows CMD:  set KGEOMIP_K=3 && set KGEOMIP_MAX_N=15 && python exec.py
-    # En Linux:        KGEOMIP_K=3 KGEOMIP_MAX_N=15 python3 exec.py
-    k      = int(os.getenv("KGEOMIP_K",      "2"))
-    max_n  = int(os.getenv("KGEOMIP_MAX_N",  "15"))
+    # ── Controlar N, k y estrategia desde variables de entorno ───────────
+    # En Windows CMD:
+    #   set KGEOMIP_K=3 && set KGEOMIP_MAX_N=15 && set KGEOMIP_ESTRATEGIA=kqnodes && python exec.py
+    # En Linux:
+    #   KGEOMIP_K=3 KGEOMIP_MAX_N=15 KGEOMIP_ESTRATEGIA=kqnodes python3 exec.py
+    k          = int(os.getenv("KGEOMIP_K",          "2"))
+    max_n      = int(os.getenv("KGEOMIP_MAX_N",      "15"))
+    estrategia = str(os.getenv("KGEOMIP_ESTRATEGIA", "kgeomip")).lower()
 
     ejecutar_desde_excel(
         ruta_entrada,
         ruta_salida,
         k=k,
         max_n=max_n,
+        estrategia=estrategia,
     )
