@@ -20,7 +20,6 @@ Ubicación sugerida en el proyecto:
 """
 
 import time
-from itertools import combinations
 from typing import Generator
 
 import numpy as np
@@ -32,20 +31,16 @@ from src.middlewares.profile import profile, profiler_manager
 from src.middlewares.slogger import SafeLogger
 from src.models.core.solution import Solution
 from src.constants.base import (
-    NET_LABEL,
     TYPE_TAG,
     INFTY_POS,
 )
 from src.constants.models import (
     DUMMY_ARR,
     ERROR_PARTITION,
+    KGEOMIP_LABEL,
+    KGEOMIP_TAG,
+    KGEOMIP_ANALYSIS_TAG,
 )
-
-# ── Nuevas constantes (añadir a constants/models.py) ────────────────────────
-KGEOMIP_LABEL: str = "KGeoMIP"
-KGEOMIP_TAG: str = f"{KGEOMIP_LABEL}_strategy"
-KGEOMIP_ANALYSIS_TAG: str = f"{KGEOMIP_LABEL}_analysis"
-# ────────────────────────────────────────────────────────────────────────────
 
 
 class KGeoMIP(GeometricSIA):

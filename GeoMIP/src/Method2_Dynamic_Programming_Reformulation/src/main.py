@@ -188,47 +188,61 @@ def inferir_estado_inicial(max_n: int = 15) -> str:
 def ejecutar_desde_excel(
     ruta_excel: Path,
     ruta_salida: Path,
+    sheet_name: str = "10A-Elementos",
     inicio: int = 0,
-    cantidad: int = 50,
+    cantidad: int = 10,
     estado_inicio: str | None = None,
     condiciones: str | None = None,
     k: int = 2,
     timeout_seg: int = 3600,
-    max_n: int = 15,          # limita qué N se selecciona automáticamente
+    max_n: int = 15,
     estrategia: str = "kgeomip",
 ):
+    """
+    Lee la hoja `sheet_name` del Excel de pruebas.
+
+    Estructura de la hoja:
+      Fila 0: "Estado inicial" | "<bits estado>" | ...
+      Fila 3: "#Prueba" | "Alcance o Purview (t+1)" | "Mecanismo(t)" | ...
+      Fila 4+: numero | letras alcance (ej. ABCDEFGHIJ) | letras mecanismo | ...
+    """
+    # Leer estado inicial desde la celda B0 de la hoja
+    hdr = pd.read_excel(ruta_excel, sheet_name=sheet_name, nrows=1, header=None)
+    estado_bits = str(hdr.iloc[0, 1]).strip()
+    n = len(estado_bits)
+
+    if estado_inicio is None:
+        estado_inicio = estado_bits
+    else:
+        n = len(estado_inicio)
+
+    condiciones = condiciones or ("1" * n)
+
+    # Leer filas de datos (skiprows=4 salta las 4 filas de cabecera)
     df = pd.read_excel(
         ruta_excel,
-        sheet_name=0,          
-        usecols="B",
-        skiprows=3,
-        names=["Subsistema"],
+        sheet_name=sheet_name,
+        skiprows=4,
+        header=None,
+        usecols=[0, 1, 2],
+        names=["Prueba", "Alcance", "Mecanismo"],
     )
-    filas = df["Subsistema"].dropna().tolist()
-    filas = filas[inicio : inicio + cantidad]
+    df = df.dropna(subset=["Alcance", "Mecanismo"])
+    filas = df[["Alcance", "Mecanismo"]].values.tolist()
+    filas = filas[inicio: inicio + cantidad]
 
-    # ── Estado inicial y TPM ──────────────────────────────────────────────
-    estado_inicio = estado_inicio or inferir_estado_inicial(max_n=max_n)
-    condiciones   = condiciones   or ("1" * len(estado_inicio))
-    n             = len(estado_inicio)
-    tpm_path      = resolver_tpm_path(estado_inicio)
-
-    # usar loadtxt en vez de genfromtxt ──────────────────
+    tpm_path = resolver_tpm_path(estado_inicio)
     tpm = cargar_tpm(tpm_path)
 
     top_n = top_n_para_n(n, k)
-    print(f"Configuración: N={n}, k={k}, top_n={top_n}, filas={len(filas)}")
+    print(f"Configuracion: N={n}, k={k}, top_n={top_n}, filas={len(filas)}, estrategia={estrategia}")
 
     resultados = []
 
-    for i, fila in enumerate(filas, start=inicio + 1):
-        partes = fila.split("|")
-        if len(partes) != 2:
-            continue
-
-        alcance   = convertir_a_binario(partes[0][: len(partes[0]) - 3], n_bits=n)
-        mecanismo = convertir_a_binario(partes[1][: len(partes[1]) - 1], n_bits=n)
-        print(f"Iteración {i} — Alcance: {alcance}  Mecanismo: {mecanismo}")
+    for i, (alc_raw, mec_raw) in enumerate(filas, start=inicio + 1):
+        alcance   = convertir_a_binario(re.sub(r"[^A-Z]", "", str(alc_raw).upper()), n_bits=n)
+        mecanismo = convertir_a_binario(re.sub(r"[^A-Z]", "", str(mec_raw).upper()), n_bits=n)
+        print(f"Iteracion {i} -- Alcance: {alcance}  Mecanismo: {mecanismo}")
 
         config_sistema = Manager(estado_inicial=estado_inicio)
         resultado_queue = multiprocessing.Queue()
@@ -301,10 +315,12 @@ def iniciar():
     k          = int(os.getenv("KGEOMIP_K",          "2"))
     max_n      = int(os.getenv("KGEOMIP_MAX_N",      "15"))
     estrategia = str(os.getenv("KGEOMIP_ESTRATEGIA", "kgeomip")).lower()
+    sheet_name = str(os.getenv("KGEOMIP_SHEET",      "10A-Elementos"))
 
     ejecutar_desde_excel(
         ruta_entrada,
         ruta_salida,
+        sheet_name=sheet_name,
         k=k,
         max_n=max_n,
         estrategia=estrategia,

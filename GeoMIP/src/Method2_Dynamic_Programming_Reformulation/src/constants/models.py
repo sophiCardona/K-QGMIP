@@ -30,6 +30,11 @@ GEOMETRIC_LABEL: str = "Geometric"
 GEOMETRIC_STRAREGY_TAG: str = f"{GEOMETRIC_LABEL}_strategy"
 GEOMETRIC_ANALYSIS_TAG: str = f"{GEOMETRIC_LABEL}_analysis"
 
+# KGeoMIP
+KGEOMIP_LABEL: str = "KGeoMIP"
+KGEOMIP_TAG: str = f"{KGEOMIP_LABEL}_strategy"
+KGEOMIP_ANALYSIS_TAG: str = f"{KGEOMIP_LABEL}_analysis"
+
 # KQNodes
 KQNODES_LABEL: str = "KQNodes"
 KQNODES_TAG: str = f"{KQNODES_LABEL}_strategy"
